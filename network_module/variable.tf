@@ -1,7 +1,10 @@
 variable "subnets" {
   description = "map of subnets of the network"
-  type        = list
-  default = ["public","private"]
+  type        = map
+  default = {
+    public = "public"
+    private = "private"
+  }
 }
 
 variable "resource_group_location" {

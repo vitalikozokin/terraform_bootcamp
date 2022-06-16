@@ -19,28 +19,62 @@ resource "azurerm_resource_group" "rg" {
   location = var.resource_group_location
 }
 
-
-module "network_details" {
-  source = "./network_module"
-  resource_group_name = var.resource_group_name
-  resource_group_location = var.resource_group_location
-  vnet_name = "virtual_network"
-  network_address = "192.168.1.0/25"
-  public_subnet = "192.168.1.0/25"
-  private_subnet = "192.168.1.0.25"
-
+resource "random_id" "randomId" {
+  keepers = {
+    resource_group = azurerm_resource_group.rg.name
+  }
+  byte_length = 8
 }
 
+resource "azurerm_storage_account" "storage_account" {
+  name                     = "diag${random_id.randomId.hex}"
+  location                 = var.resource_group_location
+  resource_group_name      = var.resource_group_name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+#this module create virtual network details
+module "network_details" {
+  source = "./network_module"
+  resource_group_name = azurerm_resource_group.rg.name
+  resource_group_location = azurerm_resource_group.rg.location
+  vnet_name = "virtual_network"
+  network_address = "192.168.1.0/24"
+  public_subnet = "192.168.1.0/25"
+  private_subnet = "192.168.1.128/25"
+
+}
+#this module create public ip and load balancer
 module "load_balancer_creation" {
   source = "./lb_module"
-  resource_group_name = var.resource_group_name
-  resource_group_location = var.resource_group_location
+  resource_group_name = azurerm_resource_group.rg.name
+  resource_group_location = azurerm_resource_group.rg.location
   load_balancer_name = "load-balancer"
   sku_type = "Standard"
   backend_pool_name = "backend-pool"
 }
-
-
+#this module create linux virtual machine scale set
+module "scale_set" {
+  source = "./scale_set_module"
+  resource_group_name = azurerm_resource_group.rg.name
+  resource_group_location = azurerm_resource_group.rg.location
+  scale_set_name = "vm_scale_set"
+  subnet_id = module.network_details.public_subnet.id
+  backend_pool_id = module.load_balancer_creation.loab_balancer_backend_pool.id
+}
+#this module create postgres service
+module "postgres_service" {
+  source = "./postgres_service_module"
+  resource_group_name = azurerm_resource_group.rg.name
+  resource_group_location = azurerm_resource_group.rg.location
+  dns_zone_name = "postgres.service.postgres.database.azure.com"
+  virtual_network_id = module.network_details.virtual_net.id
+  private_subnet_id = module.network_details.private_subnet.id
+  service_name = "postgres-service"
+  username = "postgres"
+  password = "P0$tgres2022"
+}
 //resource "azurerm_network_security_group" "security_group" {
 //  for_each            = var.subnets
 //  name                = each.key
@@ -97,20 +131,20 @@ module "load_balancer_creation" {
 //}
 
 
-resource "random_id" "randomId" {
-  keepers = {
-    resource_group = var.resource_group_name
-  }
-  byte_length = 8
-}
-
-resource "azurerm_storage_account" "storage_account" {
-  name                     = "diag${random_id.randomId.hex}"
-  location                 = var.resource_group_location
-  resource_group_name      = var.resource_group_name
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-}
+//resource "random_id" "randomId" {
+//  keepers = {
+//    resource_group = var.resource_group_name
+//  }
+//  byte_length = 8
+//}
+//
+//resource "azurerm_storage_account" "storage_account" {
+//  name                     = "diag${random_id.randomId.hex}"
+//  location                 = var.resource_group_location
+//  resource_group_name      = var.resource_group_name
+//  account_tier             = "Standard"
+//  account_replication_type = "LRS"
+//}
 
 //resource "azurerm_public_ip" "public_ip" {
 //  name                = "public-lb-ip"
@@ -182,104 +216,104 @@ resource "azurerm_storage_account" "storage_account" {
 //  }
 //}
 
-resource "azurerm_orchestrated_virtual_machine_scale_set" "vmss" {
-  location                    = var.resource_group_location
-  name                        = "vm-scale-set"
-  platform_fault_domain_count = 1
-  resource_group_name         = var.resource_group_name
-  sku_name                    = "Standard_DS1_v2"
-  instances                   = 1
-
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "UbuntuServer"
-    sku       = "18.04-LTS"
-    version   = "latest"
-  }
-
-  os_disk {
-    storage_account_type = "StandardSSD_LRS"
-    caching              = "ReadWrite"
-  }
-
-  network_interface {
-    name = "vmss-interface"
-    primary = true
-
-    ip_configuration {
-      name = "ip-configs"
-      primary = true
-      subnet_id = module.network_details.public_subnet.id
-      load_balancer_backend_address_pool_ids = [
-        module.load_balancer_creation.loab_balancer_backend_pool.id]
-    }
-  }
-  os_profile {
-    linux_configuration {
-      computer_name_prefix = "web"
-      admin_username       = "ubuntu"
-      admin_password       = "P@$$w0rd2022"
-      disable_password_authentication = false
-
-    }
-  }
-
-}
-
-resource "azurerm_monitor_autoscale_setting" "autoscale" {
-  location            = azurerm_resource_group.rg.location
-  name                = "scale-monitor"
-  resource_group_name = azurerm_resource_group.rg.name
-  target_resource_id  = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
-  profile {
-    name = "auto-scale"
-    capacity {
-      default = 1
-      minimum = 1
-      maximum = 5
-
-    }
-
-    rule {
-      metric_trigger {
-        metric_name        = "Percentage CPU"
-        metric_resource_id = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
-        operator           = "GreaterThan"
-        statistic          = "Average"
-        threshold          = 85
-        time_aggregation   = "Average"
-        time_grain         = "PT10M"
-        time_window        = "PT15M"
-      }
-      scale_action {
-        cooldown  = "PT10M"
-        direction = "Increase"
-        type      = "ChangeCount"
-        value     = 1
-      }
-    }
-
-    rule {
-      metric_trigger {
-        metric_name        = "Percentage CPU"
-        metric_resource_id = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
-        operator           = "LessThan"
-        statistic          = "Average"
-        threshold          = 85
-        time_aggregation   = "Average"
-        time_grain         = "PT10M"
-        time_window        = "PT15M"
-      }
-      scale_action {
-        cooldown  = "PT10M"
-        direction = "Decrease"
-        type      = "ChangeCount"
-        value     = 1
-      }
-    }
-  }
-}
+//resource "azurerm_orchestrated_virtual_machine_scale_set" "vmss" {
+//  location                    = var.resource_group_location
+//  name                        = "vm-scale-set"
+//  platform_fault_domain_count = 1
+//  resource_group_name         = var.resource_group_name
+//  sku_name                    = "Standard_DS1_v2"
+//  instances                   = 1
+//
+//
+//  source_image_reference {
+//    publisher = "Canonical"
+//    offer     = "UbuntuServer"
+//    sku       = "18.04-LTS"
+//    version   = "latest"
+//  }
+//
+//  os_disk {
+//    storage_account_type = "StandardSSD_LRS"
+//    caching              = "ReadWrite"
+//  }
+//
+//  network_interface {
+//    name = "vmss-interface"
+//    primary = true
+//
+//    ip_configuration {
+//      name = "ip-configs"
+//      primary = true
+//      subnet_id = module.network_details.public_subnet.id
+//      load_balancer_backend_address_pool_ids = [
+//        module.load_balancer_creation.loab_balancer_backend_pool.id]
+//    }
+//  }
+//  os_profile {
+//    linux_configuration {
+//      computer_name_prefix = "web"
+//      admin_username       = "ubuntu"
+//      admin_password       = "P@$$w0rd2022"
+//      disable_password_authentication = false
+//
+//    }
+//  }
+//
+//}
+//
+//resource "azurerm_monitor_autoscale_setting" "autoscale" {
+//  location            = azurerm_resource_group.rg.location
+//  name                = "scale-monitor"
+//  resource_group_name = azurerm_resource_group.rg.name
+//  target_resource_id  = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
+//  profile {
+//    name = "auto-scale"
+//    capacity {
+//      default = 1
+//      minimum = 1
+//      maximum = 5
+//
+//    }
+//
+//    rule {
+//      metric_trigger {
+//        metric_name        = "Percentage CPU"
+//        metric_resource_id = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
+//        operator           = "GreaterThan"
+//        statistic          = "Average"
+//        threshold          = 85
+//        time_aggregation   = "Average"
+//        time_grain         = "PT10M"
+//        time_window        = "PT15M"
+//      }
+//      scale_action {
+//        cooldown  = "PT10M"
+//        direction = "Increase"
+//        type      = "ChangeCount"
+//        value     = 1
+//      }
+//    }
+//
+//    rule {
+//      metric_trigger {
+//        metric_name        = "Percentage CPU"
+//        metric_resource_id = azurerm_orchestrated_virtual_machine_scale_set.vmss.id
+//        operator           = "LessThan"
+//        statistic          = "Average"
+//        threshold          = 85
+//        time_aggregation   = "Average"
+//        time_grain         = "PT10M"
+//        time_window        = "PT15M"
+//      }
+//      scale_action {
+//        cooldown  = "PT10M"
+//        direction = "Decrease"
+//        type      = "ChangeCount"
+//        value     = 1
+//      }
+//    }
+//  }
+//}
 
 
 //resource "azurerm_network_security_rule" "security_rules" {
@@ -299,37 +333,37 @@ resource "azurerm_monitor_autoscale_setting" "autoscale" {
 //}
 
 
-resource "azurerm_private_dns_zone" "postgres_dns" {
-  name                = "postgres.service.postgres.database.azure.com"
-  resource_group_name = azurerm_resource_group.rg.name
-}
-
-
-resource "azurerm_private_dns_zone_virtual_network_link" "postgres_zone" {
-  name                  = "exampleVnetZone.com"
-  private_dns_zone_name = azurerm_private_dns_zone.postgres_dns.name
-  virtual_network_id    = azurerm_virtual_network.vnet.id
-  resource_group_name   = azurerm_resource_group.rg.name
-}
-
-
-resource "azurerm_postgresql_flexible_server" "postgresql" {
-  name                   = "postgres-sql-service"
-  resource_group_name    = azurerm_resource_group.rg.name
-  location               = azurerm_resource_group.rg.location
-  version                = "12"
-  delegated_subnet_id    = azurerm_subnet.subnet_private.id
-  private_dns_zone_id    = azurerm_private_dns_zone.postgres_dns.id
-  administrator_login    = "postgres"
-  administrator_password = "P0$tgres1106"
-  zone                   = "1"
-
-  storage_mb = 32768
-
-  sku_name   = "B_Standard_B1ms"
-  depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres_zone]
-
-}
+//resource "azurerm_private_dns_zone" "postgres_dns" {
+//  name                = "postgres.service.postgres.database.azure.com"
+//  resource_group_name = azurerm_resource_group.rg.name
+//}
+//
+//
+//resource "azurerm_private_dns_zone_virtual_network_link" "postgres_zone" {
+//  name                  = "exampleVnetZone.com"
+//  private_dns_zone_name = azurerm_private_dns_zone.postgres_dns.name
+//  virtual_network_id    = azurerm_virtual_network.vnet.id
+//  resource_group_name   = azurerm_resource_group.rg.name
+//}
+//
+//
+//resource "azurerm_postgresql_flexible_server" "postgresql" {
+//  name                   = "postgres-sql-service"
+//  resource_group_name    = azurerm_resource_group.rg.name
+//  location               = azurerm_resource_group.rg.location
+//  version                = "12"
+//  delegated_subnet_id    = azurerm_subnet.subnet_private.id
+//  private_dns_zone_id    = azurerm_private_dns_zone.postgres_dns.id
+//  administrator_login    = "postgres"
+//  administrator_password = "P0$tgres1106"
+//  zone                   = "1"
+//
+//  storage_mb = 32768
+//
+//  sku_name   = "B_Standard_B1ms"
+//  depends_on = [azurerm_private_dns_zone_virtual_network_link.postgres_zone]
+//
+//}
 
 
 

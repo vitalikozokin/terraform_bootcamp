@@ -8,16 +8,7 @@ variable "resource_group_location" {
   default = "canadacentral"
 }
 
-variable "names" {
-  description = "name of server and network interfaces"
-  type        = map(any)
-  default = {
-    web1     = "public"
-    web2     = "public"
-    web3     = "public"
-    database = "private"
-  }
-}
+
 
 
 

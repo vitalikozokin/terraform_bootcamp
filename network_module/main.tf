@@ -13,15 +13,6 @@ provider "azurerm" {
   features {}
 }
 
-resource "azurerm_network_security_group" "security_group" {
-  for_each            = var.subnets
-  name                = each.key
-  location            = var.resource_group_location
-  resource_group_name = var.resource_group_name
-}
-
-
-
 resource "azurerm_virtual_network" "vnet" {
   name                = var.vnet_name
   address_space       = [var.network_address]
@@ -29,10 +20,18 @@ resource "azurerm_virtual_network" "vnet" {
   resource_group_name = var.resource_group_name
 }
 
+resource "azurerm_network_security_group" "security_group" {
+  for_each            = var.subnets
+  name                = each.value
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+}
+
+
 resource "azurerm_subnet" "subnet_public" {
   name                 = "public"
   resource_group_name  = var.resource_group_name
-  virtual_network_name = var.vnet_name
+  virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = [var.public_subnet]
 
 
@@ -41,7 +40,7 @@ resource "azurerm_subnet" "subnet_public" {
 resource "azurerm_subnet" "subnet_private" {
   name                 = "private"
   resource_group_name  = var.resource_group_name
-  virtual_network_name = var.vnet_name
+  virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = [var.private_subnet]
 
   delegation {
