@@ -15,16 +15,31 @@ provider "azurerm" {
 }
 
 resource "azurerm_resource_group" "rg" {
-  name     = "bootcamp"
-  location = "canadacentral"
+  name     = var.resource_group_name
+  location = var.resource_group_location
 }
 
 
 module "network_details" {
   source = "./network_module"
-
+  resource_group_name = var.resource_group_name
+  resource_group_location = var.resource_group_location
+  vnet_name = "virtual_network"
+  network_address = "192.168.1.0/25"
+  public_subnet = "192.168.1.0/25"
+  private_subnet = "192.168.1.0.25"
 
 }
+
+module "load_balancer_creation" {
+  source = "./lb_module"
+  resource_group_name = var.resource_group_name
+  resource_group_location = var.resource_group_location
+  load_balancer_name = "load-balancer"
+  sku_type = "Standard"
+  backend_pool_name = "backend-pool"
+}
+
 
 //resource "azurerm_network_security_group" "security_group" {
 //  for_each            = var.subnets
@@ -84,52 +99,52 @@ module "network_details" {
 
 resource "random_id" "randomId" {
   keepers = {
-    resource_group = azurerm_resource_group.rg.name
+    resource_group = var.resource_group_name
   }
   byte_length = 8
 }
 
 resource "azurerm_storage_account" "storage_account" {
   name                     = "diag${random_id.randomId.hex}"
-  location                 = azurerm_resource_group.rg.location
-  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = var.resource_group_location
+  resource_group_name      = var.resource_group_name
   account_tier             = "Standard"
   account_replication_type = "LRS"
 }
 
-resource "azurerm_public_ip" "public_ip" {
-  name                = "public-lb-ip"
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
-  allocation_method   = "Static"
-  sku = "Standard"
-}
-
-resource "azurerm_lb" "load_balancer" {
-  name                = "load-balancer"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  sku = "Standard"
-
-  frontend_ip_configuration {
-    name                 = "public-ip-address"
-    public_ip_address_id = azurerm_public_ip.public_ip.id
-  }
-}
-
-resource "azurerm_lb_backend_address_pool" "backend_pool" {
-  loadbalancer_id = azurerm_lb.load_balancer.id
-  name            = "backend-pool"
-
-}
-
-
-resource "azurerm_lb_probe" "load_balancer" {
-  loadbalancer_id = azurerm_lb.load_balancer.id
-  name            = "ssh-running-probe"
-  port            = 8080
-
-}
+//resource "azurerm_public_ip" "public_ip" {
+//  name                = "public-lb-ip"
+//  resource_group_name =
+//  location            = azurerm_resource_group.rg.location
+//  allocation_method   = "Static"
+//  sku = "Standard"
+//}
+//
+//resource "azurerm_lb" "load_balancer" {
+//  name                = "load-balancer"
+//  location            = azurerm_resource_group.rg.location
+//  resource_group_name = azurerm_resource_group.rg.name
+//  sku = "Standard"
+//
+//  frontend_ip_configuration {
+//    name                 = "public-ip-address"
+//    public_ip_address_id = azurerm_public_ip.public_ip.id
+//  }
+//}
+//
+//resource "azurerm_lb_backend_address_pool" "backend_pool" {
+//  loadbalancer_id = azurerm_lb.load_balancer.id
+//  name            = "backend-pool"
+//
+//}
+//
+//
+//resource "azurerm_lb_probe" "load_balancer" {
+//  loadbalancer_id = azurerm_lb.load_balancer.id
+//  name            = "ssh-running-probe"
+//  port            = 8080
+//
+//}
 
 
 //resource "azurerm_linux_virtual_machine_scale_set" "vmss" {
@@ -168,10 +183,10 @@ resource "azurerm_lb_probe" "load_balancer" {
 //}
 
 resource "azurerm_orchestrated_virtual_machine_scale_set" "vmss" {
-  location                    = azurerm_resource_group.rg.location
+  location                    = var.resource_group_location
   name                        = "vm-scale-set"
   platform_fault_domain_count = 1
-  resource_group_name         = azurerm_resource_group.rg.name
+  resource_group_name         = var.resource_group_name
   sku_name                    = "Standard_DS1_v2"
   instances                   = 1
 
@@ -195,9 +210,9 @@ resource "azurerm_orchestrated_virtual_machine_scale_set" "vmss" {
     ip_configuration {
       name = "ip-configs"
       primary = true
-      subnet_id = azurerm_subnet.subnet_public.id
+      subnet_id = module.network_details.public_subnet.id
       load_balancer_backend_address_pool_ids = [
-        azurerm_lb_backend_address_pool.backend_pool.id]
+        module.load_balancer_creation.loab_balancer_backend_pool.id]
     }
   }
   os_profile {
@@ -267,21 +282,21 @@ resource "azurerm_monitor_autoscale_setting" "autoscale" {
 }
 
 
-resource "azurerm_network_security_rule" "security_rules" {
-  for_each = var.subnets_security_rules
-  name                        = each.value.name
-  priority                    = each.value.priority
-  direction                   = each.value.direction
-  access                      = each.value.access
-  protocol                    = each.value.protocol
-  source_port_range           = each.value.source_port_range
-  destination_port_range      = each.value.destination_port_range
-  source_address_prefix       = each.value.source_address_prefix
-  destination_address_prefix  = each.value.destination_address_prefix
-  resource_group_name         = azurerm_resource_group.rg.name
-  network_security_group_name = azurerm_network_security_group.security_group[each.value.type].name
-
-}
+//resource "azurerm_network_security_rule" "security_rules" {
+//  for_each = var.subnets_security_rules
+//  name                        = each.value.name
+//  priority                    = each.value.priority
+//  direction                   = each.value.direction
+//  access                      = each.value.access
+//  protocol                    = each.value.protocol
+//  source_port_range           = each.value.source_port_range
+//  destination_port_range      = each.value.destination_port_range
+//  source_address_prefix       = each.value.source_address_prefix
+//  destination_address_prefix  = each.value.destination_address_prefix
+//  resource_group_name         = azurerm_resource_group.rg.name
+//  network_security_group_name = azurerm_network_security_group.security_group[each.value.type].name
+//
+//}
 
 
 resource "azurerm_private_dns_zone" "postgres_dns" {
