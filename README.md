@@ -1,1 +1,1 @@
-# read the read me files inside the folder
+# read the read me files inside the folders
